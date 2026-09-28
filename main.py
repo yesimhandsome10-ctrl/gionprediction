@@ -87,4 +87,4 @@ selected_year = st.slider("연도를 선택하세요:", min_value=1900, max_valu
 predicted_temp = slope * (selected_year - 1908) + intercept
 
 # 결과를 크게 표시
-st.metric(label=f"{selected_year}년 예상 평균기온", value=f"{predicted_temp:.2f} ℃")QQ  
+st.metric(label=f"{selected_year}년 예상 평균기온", value=f"{predicted_temp:.2f} ℃")
