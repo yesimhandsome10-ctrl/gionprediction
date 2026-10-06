@@ -1,76 +1,93 @@
+# app.py
 import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
-from scipy.stats import linregress
 
-# 페이지 기본 설정
-st.set_page_config(page_title="서울 기온 예측기", layout="centered")
-st.title("🌡️ 서울 기온 예측기")
+# 페이지 설정
+st.set_page_config(page_title="기온 예측기", layout="centered")
+st.title("서울 기온 예측기 🌡️")
 
 @st.cache_data
 def load_and_preprocess_data():
-    # 데이터 불러오기
     url = "https://raw.githubusercontent.com/greatsong/modudata/bb860932644270ad1199f10d3e7670e30231bce4/data/seoul.csv"
+    # 데이터 불러오기
+    df = pd.read_csv(url, encoding='utf-8')
     
-    # 지정된 열 이름으로 데이터 읽기
-    df = pd.read_csv(url, encoding='utf-8', names=['날짜', '지점', '평균기온', '최저기온', '최고기온'], header=0)
+    # 열 이름 유연하게 매핑 (파일의 실제 열 이름에 '(℃)' 등이 포함되어 있을 수 있음)
+    col_map = {}
+    for col in df.columns:
+        if '날짜' in col: col_map[col] = '날짜'
+        elif '평균기온' in col: col_map[col] = '평균기온'
+    df = df.rename(columns=col_map)
     
-    # 날짜 데이터 처리 및 연도 추출
+    # 날짜 데이터 변환 및 연도 추출
     df['날짜'] = pd.to_datetime(df['날짜'])
     df['연도'] = df['날짜'].dt.year
     
-    # 연도별 평균기온과 관측일수(데이터 개수) 계산
-    yearly_stats = df.groupby('연도')['평균기온'].agg(['mean', 'count']).reset_index()
-    yearly_stats.rename(columns={'mean': '연평균기온', 'count': '관측일수'}, inplace=True)
+    # 1. 2025년 이하 데이터만 필터링
+    df = df[df['연도'] <= 2025]
     
-    # 조건 필터링: 2025년 이하, 관측일수 300일 이상
-    filtered_data = yearly_stats[(yearly_stats['연도'] <= 2025) & (yearly_stats['관측일수'] >= 300)]
+    # 2. 연도별 관측일수(결측치 제외) 및 평균기온 계산
+    yearly_df = df.groupby('연도')['평균기온'].agg(['count', 'mean']).reset_index()
     
-    return filtered_data
+    # 3. 관측일이 300일 미만인 해 제외
+    yearly_df = yearly_df[yearly_df['count'] >= 300].copy()
+    yearly_df = yearly_df.dropna(subset=['mean'])
+    
+    return yearly_df
 
-# 데이터 로드
-data = load_and_preprocess_data()
+# 데이터 준비
+yearly_df = load_and_preprocess_data()
 
-# 회귀 분석 (독립변수: 1908년부터 지난 연수)
-X = data['연도'] - 1908
-Y = data['연평균기온']
+# 4. 회귀 분석 및 상관계수 계산 (독립변수: 연도 - 1908)
+x = yearly_df['연도'] - 1908
+y = yearly_df['mean']
 
-slope, intercept, r_value, p_value, std_err = linregress(X, Y)
+# np.polyfit을 이용해 1차 함수(직선)의 기울기와 절편 구하기
+slope, intercept = np.polyfit(x, y, 1)
 
-# 화면에 기본 정보 출력
-st.subheader("📊 데이터 요약 및 상관관계")
-st.write(f"- **분석에 사용된 해의 개수**: {len(data)}년")
-st.write(f"- **데이터 시작 연도**: {data['연도'].min()}년")
-st.write(f"- **데이터 끝 연도**: {data['연도'].max()}년")
-st.write(f"- **상관계수 (r)**: {r_value:.4f}")
+# 피어슨 상관계수 구하기
+correlation = np.corrcoef(x, y)[0, 1]
 
-# Plotly 그래프 생성
+# 회귀선을 위한 예측값 저장
+yearly_df['predicted'] = slope * x + intercept
+
+# 5. UI: 분석 요약 정보 표시
+start_year = yearly_df['연도'].min()
+end_year = yearly_df['연도'].max()
+data_count = len(yearly_df)
+
+st.info(
+    f"📊 **분석 요약**\n"
+    f"- **사용된 데이터 기간**: {start_year}년 ~ {end_year}년\n"
+    f"- **직선을 만든 해의 개수**: {data_count}개 연도\n"
+    f"- **상관계수 (연도-기온)**: {correlation:.4f}"
+)
+
+# 6. Plotly 그래프 그리기
 fig = go.Figure()
 
-# 실제 데이터 산점도 추가
+# 산점도 (실제 평균기온)
 fig.add_trace(go.Scatter(
-    x=data['연도'], 
-    y=data['연평균기온'], 
+    x=yearly_df['연도'], 
+    y=yearly_df['mean'], 
     mode='markers', 
-    name='연평균기온 (관측값)',
-    marker=dict(color='royalblue')
+    name='연도별 평균기온',
+    marker=dict(color='royalblue', size=6)
 ))
 
-# 회귀 직선 계산 및 추가 (가로축은 연도 그대로 표시)
-line_x = np.array([data['연도'].min(), data['연도'].max()])
-line_y = slope * (line_x - 1908) + intercept
-
+# 회귀 직선
 fig.add_trace(go.Scatter(
-    x=line_x, 
-    y=line_y, 
+    x=yearly_df['연도'], 
+    y=yearly_df['predicted'], 
     mode='lines', 
-    name='추세선 (회귀 직선)',
+    name='회귀 직선',
     line=dict(color='red', width=2)
 ))
 
 fig.update_layout(
-    title="연도별 서울 평균기온 변화 및 추세선",
+    title="서울 연평균기온 변화 및 회귀선",
     xaxis_title="연도",
     yaxis_title="평균기온 (℃)",
     template="plotly_white"
@@ -78,13 +95,14 @@ fig.update_layout(
 
 st.plotly_chart(fig, use_container_width=True)
 
-# 기온 예측 슬라이더 및 결과 표시
-st.subheader("🔮 특정 연도의 예상 기온 알아보기")
+st.divider()
 
-selected_year = st.slider("연도를 선택하세요:", min_value=1900, max_value=2100, value=2025)
+# 7. 인터랙티브 기온 예측 (슬라이더)
+st.subheader("🔮 연도별 기온 예측")
+selected_year = st.slider("예상 기온을 확인할 연도를 선택하세요.", min_value=1900, max_value=2100, value=2026, step=1)
 
-# 회귀 식을 이용한 기온 예측 (y = ax + b, x는 1908년부터 지난 연수)
+# 예측 공식 적용
 predicted_temp = slope * (selected_year - 1908) + intercept
 
-# 결과를 크게 표시
+# 예측 결과 크게 표시
 st.metric(label=f"{selected_year}년 예상 평균기온", value=f"{predicted_temp:.2f} ℃")
